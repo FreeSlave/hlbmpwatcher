@@ -1,0 +1,134 @@
+#!/usr/bin/python3
+
+import logging
+import os
+import re
+import sys
+import time
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from PIL import Image
+
+if sys.platform == 'win32':
+    import winreg
+
+def read_reg(ep, p = r"", k = ''):
+    try:
+        key = winreg.OpenKeyEx(ep, p)
+        value = winreg.QueryValueEx(key,k)
+        if key:
+            winreg.CloseKey(key)
+        return value[0]
+    except Exception as e:
+        return None
+    return None
+
+def get_main_steam_path():
+    if sys.platform == 'win32':
+        steam_path = str(read_reg(ep = winreg.HKEY_LOCAL_MACHINE, p = r"SOFTWARE\Wow6432Node\Valve\Steam", k = 'InstallPath'))
+        if steam_path is None or not os.path.exists(steam_path):
+            steam_path = str(read_reg(ep = winreg.HKEY_LOCAL_MACHINE, p = r"SOFTWARE\Valve\Steam", k = 'InstallPath'))
+        return steam_path
+    else:
+        home_directory = os.path.expanduser('~')
+        steam_path = os.path.join( home_directory, '.steam', 'steam')
+        return steam_path
+    return None
+
+def screenshot_folders_from_storage_paths(storage_paths):
+    paths = []
+    for storage_path in storage_paths:
+        apps_path = os.path.join(storage_path, 'steamapps', 'common')
+        if (os.path.isdir(apps_path)):
+            hl_path = os.path.join(apps_path, 'Half-Life')
+            try:
+                for subitem in os.listdir(hl_path):
+                    possible_mod_path = os.path.join(hl_path, subitem)
+                    if os.path.isdir(possible_mod_path):
+                        liblist_path = os.path.join(possible_mod_path, 'liblist.gam')
+                        if os.path.isfile(liblist_path):
+                            paths.append(possible_mod_path)
+            except:
+                pass
+            sven_screenshots_path = os.path.join(apps_path, 'Sven Co-op', 'svencoop', 'screenshots')
+            if os.path.isdir(sven_screenshots_path):
+                paths.append(sven_screenshots_path)
+    return paths
+
+def autodetect_hl_screenshot_folders():
+    paths = []
+    main_steam_path = get_main_steam_path()
+    if main_steam_path is None:
+        logging.warning("Couldn't detect steam main path")
+        return paths
+    if not os.path.isdir(main_steam_path):
+        logging.warning("Directory '%s' doesn't exist", main_steam_path)
+        return paths
+
+    storage_paths = []
+
+    libraryfolders_path = os.path.join(main_steam_path, 'steamapps', 'libraryfolders.vdf')
+    try:
+        with open(libraryfolders_path, 'r') as libraryfolders_file:
+            regex = re.compile(r'\s*"path"\s*"(.+)"')
+            for line in libraryfolders_file.readlines():
+                result = regex.match(line)
+                if result:
+                    storage_path = result.group(1)
+                    if os.path.isdir(storage_path):
+                        storage_paths.append(os.path.normpath(storage_path))
+    except Error:
+        pass
+    if len(storage_paths) == 0:
+        storage_paths.append(main_steam_path)
+    return screenshot_folders_from_storage_paths(storage_paths)
+
+class Handler(FileSystemEventHandler):
+
+    @staticmethod
+    def on_any_event(event):
+        if event.is_directory:
+            return None
+
+        elif event.event_type == 'modified' and event.src_path.endswith('.bmp'):
+            img_path = event.src_path
+            basepath, e = os.path.splitext(img_path)
+            try:
+                with Image.open(img_path) as im:
+                    png_path = basepath + '.png'
+                    if not os.path.exists(png_path):
+                        im.save(png_path)
+                        logging.info("Converted '%s' to '%s' in '%s'", os.path.basename(img_path), os.path.basename(png_path), os.path.dirname(img_path))
+            except OSError as err:
+                logging.error("Cannot convert '%s' to PNG: %s", img_path, str(err))
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s - %(message)s',
+                        datefmt='%Y-%m-%d %H:%M:%S')
+
+    existing_paths = autodetect_hl_screenshot_folders()
+    for path in sys.argv[1:]:
+        if os.path.isdir(path):
+            existing_paths.append(path)
+        else:
+            logging.warning("'%s' is not an existing directory.")
+
+    if len(existing_paths) == 0:
+        logging.info("Nothing to observe. Directories are not provided or do not exists. Exiting...")
+        sys.exit()
+
+    event_handler = Handler()
+    observer = Observer()
+
+    for path in existing_paths:
+        observer.schedule(event_handler, path, recursive=False)
+        logging.info("Observing '%s'", path)
+
+    observer.start()
+    try:
+        while True:
+            time.sleep(1)
+    finally:
+        observer.stop()
+        observer.join()

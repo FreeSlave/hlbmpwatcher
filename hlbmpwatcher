@@ -13,22 +13,22 @@ from PIL import Image
 if sys.platform == 'win32':
     import winreg
 
-def read_reg(ep, p = r"", k = ''):
+def read_reg_str(ep, p = r"", k = ''):
     try:
         key = winreg.OpenKeyEx(ep, p)
         value = winreg.QueryValueEx(key,k)
         if key:
             winreg.CloseKey(key)
-        return value[0]
+        return str(value[0])
     except Exception as e:
         return None
     return None
 
 def get_main_steam_path():
     if sys.platform == 'win32':
-        steam_path = str(read_reg(ep = winreg.HKEY_LOCAL_MACHINE, p = r"SOFTWARE\Wow6432Node\Valve\Steam", k = 'InstallPath'))
+        steam_path = read_reg_str(ep = winreg.HKEY_LOCAL_MACHINE, p = r"SOFTWARE\Wow6432Node\Valve\Steam", k = 'InstallPath')
         if steam_path is None or not os.path.exists(steam_path):
-            steam_path = str(read_reg(ep = winreg.HKEY_LOCAL_MACHINE, p = r"SOFTWARE\Valve\Steam", k = 'InstallPath'))
+            steam_path = read_reg_str(ep = winreg.HKEY_LOCAL_MACHINE, p = r"SOFTWARE\Valve\Steam", k = 'InstallPath')
         return steam_path
     else:
         home_directory = os.path.expanduser('~')
@@ -90,19 +90,6 @@ def get_steam_storage_paths(main_steam_path):
     if len(storage_paths) == 0:
         storage_paths.append(main_steam_path)
     return storage_paths
-
-def autodetect_hl_screenshot_folders():
-    paths = []
-    main_steam_path = get_main_steam_path()
-    if main_steam_path is None:
-        logging.warning("Couldn't detect steam main path")
-        return paths
-    if not os.path.isdir(main_steam_path):
-        logging.warning("Directory '%s' doesn't exist", main_steam_path)
-        return paths
-
-    steam_storage_paths = get_steam_storage_paths(main_steam_path)
-    return screenshot_folders_from_storage_paths(steam_storage_paths)
 
 class ScreenshotHandler(FileSystemEventHandler):
     # error thrown if bmp file is not fully written yet

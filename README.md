@@ -1,4 +1,4 @@
-# Half-Life BMP watcher
+# Half-Life BMP watcher [![Build Status](https://github.com/FreeSlave/hlbmpwatcher/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/FreeSlave/hlbmpwatcher/actions/workflows/build.yml)
 
 This is a script for automatic conversion of newly taken Half-Life screenshots from BMP to PNG format.
 

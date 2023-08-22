@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+import argparse
 import logging
 import os
 import re
@@ -35,36 +36,43 @@ def get_main_steam_path():
         return steam_path
     return None
 
-def screenshot_folders_from_storage_paths(storage_paths):
-    paths = []
-    for storage_path in storage_paths:
+def get_halflife_path(steam_storage_paths):
+    for storage_path in steam_storage_paths:
         apps_path = os.path.join(storage_path, 'steamapps', 'common')
-        if (os.path.isdir(apps_path)):
-            hl_path = os.path.join(apps_path, 'Half-Life')
-            try:
-                for subitem in os.listdir(hl_path):
-                    possible_mod_path = os.path.join(hl_path, subitem)
-                    if os.path.isdir(possible_mod_path):
-                        liblist_path = os.path.join(possible_mod_path, 'liblist.gam')
-                        if os.path.isfile(liblist_path):
-                            paths.append(possible_mod_path)
-            except:
-                pass
-            sven_screenshots_path = os.path.join(apps_path, 'Sven Co-op', 'svencoop', 'screenshots')
-            if os.path.isdir(sven_screenshots_path):
-                paths.append(sven_screenshots_path)
+        hl_path = os.path.join(apps_path, 'Half-Life')
+        if os.path.isdir(hl_path):
+            return hl_path
+    return None
+
+def get_svencoop_path(steam_storage_paths):
+    for storage_path in steam_storage_paths:
+        apps_path = os.path.join(storage_path, 'steamapps', 'common')
+        sven_path = os.path.join(apps_path, 'Sven Co-op')
+        if os.path.isdir(sven_path):
+            return sven_path
+    return None
+
+def screenshot_folders_from_storage_paths(steam_storage_paths):
+    paths = []
+
+    hl_path = get_halflife_path(steam_storage_paths)
+    if hl_path is not None:
+        for subitem in os.listdir(hl_path):
+            possible_mod_path = os.path.join(hl_path, subitem)
+            if os.path.isdir(possible_mod_path):
+                liblist_path = os.path.join(possible_mod_path, 'liblist.gam')
+                if os.path.isfile(liblist_path):
+                    paths.append(possible_mod_path)
+
+    sven_path = get_svencoop_path(steam_storage_paths)
+    if sven_path is not None:
+        sven_screenshots_path = os.path.join(sven_path, 'svencoop', 'screenshots')
+        if os.path.isdir(sven_screenshots_path):
+            paths.append(sven_screenshots_path)
+
     return paths
 
-def autodetect_hl_screenshot_folders():
-    paths = []
-    main_steam_path = get_main_steam_path()
-    if main_steam_path is None:
-        logging.warning("Couldn't detect steam main path")
-        return paths
-    if not os.path.isdir(main_steam_path):
-        logging.warning("Directory '%s' doesn't exist", main_steam_path)
-        return paths
-
+def get_steam_storage_paths(main_steam_path):
     storage_paths = []
 
     libraryfolders_path = os.path.join(main_steam_path, 'steamapps', 'libraryfolders.vdf')
@@ -81,15 +89,29 @@ def autodetect_hl_screenshot_folders():
         pass
     if len(storage_paths) == 0:
         storage_paths.append(main_steam_path)
-    return screenshot_folders_from_storage_paths(storage_paths)
+    return storage_paths
 
-class Handler(FileSystemEventHandler):
+def autodetect_hl_screenshot_folders():
+    paths = []
+    main_steam_path = get_main_steam_path()
+    if main_steam_path is None:
+        logging.warning("Couldn't detect steam main path")
+        return paths
+    if not os.path.isdir(main_steam_path):
+        logging.warning("Directory '%s' doesn't exist", main_steam_path)
+        return paths
+
+    steam_storage_paths = get_steam_storage_paths(main_steam_path)
+    return screenshot_folders_from_storage_paths(steam_storage_paths)
+
+class ScreenshotHandler(FileSystemEventHandler):
+    # error thrown if bmp file is not fully written yet
+    truncated_error_regex = re.compile('image file is truncated')
 
     @staticmethod
-    def on_any_event(event):
+    def on_modified(event):
         if event.is_directory:
             return None
-
         elif event.event_type == 'modified' and event.src_path.endswith('.bmp'):
             img_path = event.src_path
             basepath, e = os.path.splitext(img_path)
@@ -100,35 +122,107 @@ class Handler(FileSystemEventHandler):
                         im.save(png_path)
                         logging.info("Converted '%s' to '%s' in '%s'", os.path.basename(img_path), os.path.basename(png_path), os.path.dirname(img_path))
             except OSError as err:
-                logging.error("Cannot convert '%s' to PNG: %s", img_path, str(err))
+                errstr = str(err)
+                if ScreenshotHandler.truncated_error_regex.search(errstr) is None:
+                    logging.error("Cannot convert '%s' to PNG: %s", img_path, str(err))
+
+class ModfolderHandler(FileSystemEventHandler):
+    def __init__(self, observer, modwatches):
+        super().__init__()
+        self.observer = observer
+        self.modwatches = modwatches
+    def on_created(self, event):
+        if not event.is_directory:
+            return None
+        logging.info("Starting observing new directory: %s", event.src_path)
+        modwatches[event.src_path] = observer.schedule(ScreenshotHandler(), event.src_path, recursive=False)
+    def on_deleted(self, event):
+        if not event.is_directory:
+            return None
+        if event.src_path in modwatches:
+            logging.info("Removing directory from the watch list because it was deleted: %s", event.src_path)
+            observer.unschedule(modwatches[event.src_path])
+            del modwatches[event.src_path]
+    def on_moved(self, event):
+        if not event.is_directory:
+            return None
+        if event.src_path in modwatches:
+            logging.info("The directory renamed from '%s' to '%s'. Updating the watch.", event.src_path, event.dest_path)
+            observer.unschedule(modwatches[event.src_path])
+            del modwatches[event.src_path]
+            modwatches[event.dest_path] = observer.schedule(ScreenshotHandler(), event.dest_path, recursive=False)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
 
-    existing_paths = autodetect_hl_screenshot_folders()
-    for path in sys.argv[1:]:
+    arg_parser = argparse.ArgumentParser(
+                    prog='Half-Life BMP watcher',
+                    description='Automatically convert newly taken Half-Life screenshots from BMP to PNG')
+    arg_parser.add_argument('extra_paths', type=int, nargs='*', help='additional paths to watch for BMP files')
+    arg_parser.add_argument('--dry-run', action='store_true', help="don't actually start observation, just print observed paths")
+    args = arg_parser.parse_args()
+
+    autodetected_paths = []
+    hl_path = None
+    main_steam_path = get_main_steam_path()
+    if main_steam_path is None:
+        logging.warning("Couldn't detect steam main path")
+    elif not os.path.isdir(main_steam_path):
+        logging.warning("Directory '%s' doesn't exist", main_steam_path)
+    else:
+        steam_storage_paths = get_steam_storage_paths(main_steam_path)
+        hl_path = get_halflife_path(steam_storage_paths)
+        autodetected_paths = screenshot_folders_from_storage_paths(steam_storage_paths)
+
+    existing_paths = autodetected_paths
+    extra_paths = []
+    for path in args.extra_paths:
         if os.path.isdir(path):
-            existing_paths.append(path)
+            extra_paths.append(path)
         else:
-            logging.warning("'%s' is not an existing directory.")
+            logging.warning("'%s' is not an existing directory.", path)
+    existing_paths.extend(set(extra_paths))
 
     if len(existing_paths) == 0:
         logging.info("Nothing to observe. Directories are not provided or do not exists. Exiting...")
         sys.exit()
 
-    event_handler = Handler()
+    print("Observing for new directories:")
+    print("\t%s" % hl_path)
+
+    print("Observing for screenshots:")
+    for path in existing_paths:
+        print("\t%s" % path)
+
+    if args.dry_run:
+        sys.exit();
+
+    screenshot_handler = ScreenshotHandler()
     observer = Observer()
+    modwatches = dict()
 
     for path in existing_paths:
-        observer.schedule(event_handler, path, recursive=False)
-        logging.info("Observing '%s'", path)
+        modwatches[path] =  observer.schedule(screenshot_handler, path, recursive=False)
+
+    modfolder_handler = ModfolderHandler(observer, modwatches)
+
+    if hl_path is not None:
+        observer.schedule(modfolder_handler, hl_path, recursive=False)
 
     observer.start()
     try:
-        while True:
-            time.sleep(1)
+        try:
+            while observer.is_alive():
+                observer.join(1)
+        except TypeError:
+            # support old versions
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            # just stop the loop
+            pass
     finally:
         observer.stop()
         observer.join()

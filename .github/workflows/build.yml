@@ -1,0 +1,25 @@
+name: build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.8
+      - name: Install dependencies
+        run: pip install watchdog pillow pyinstaller
+      - name: Make executable with pyinstaller
+        run: pyinstaller --onefile hlbmpwatcher
+      - name: Test run
+        run: dist/hlbmpwatcher.exe --dry-run
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: hlbmpwatcher
+          path: dist/hlbmpwatcher.exe

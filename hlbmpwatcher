@@ -9,6 +9,7 @@ import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from PIL import Image
+import concurrent.futures
 
 if sys.platform == 'win32':
     import winreg
@@ -199,6 +200,7 @@ if __name__ == "__main__":
     for path in screenshot_paths:
         print("\t%s" % path)
 
+    conversion_executor =  None if args.dry_run else concurrent.futures.ThreadPoolExecutor(max_workers=4)
     if args.convert_existing:
         bmp_screenshot_re = re.compile(r"[0-9]{4}\.bmp")
         for path in screenshot_paths:
@@ -208,7 +210,9 @@ if __name__ == "__main__":
                     if args.dry_run:
                         logging.info("Would convert '%s' to PNG", img_path)
                     else:
-                        convert_to_png(img_path)
+                        conversion_executor.submit(convert_to_png, img_path)
+    if conversion_executor:
+        conversion_executor.shutdown(wait=True)
 
     if args.no_watch or args.dry_run:
         sys.exit()

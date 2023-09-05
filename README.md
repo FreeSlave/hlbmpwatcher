@@ -35,3 +35,16 @@ Run the script (or executable) with the `--help` parameter to see available opti
 Use `--convert-existing` option if you want to convert screenshots that existed prior to running the tool.
 
 Use `--no-watch` option to disable file watching. The tool will exit after showing the paths and converting existing .bmp images (if `--convert-existing` was provided).
+
+### Create systemd unit for Linux
+
+You can generate systemd service file and add it to your user services by running
+
+```sh
+./generate-systemd-service.sh
+# examine generated hlbmpwatcher.service. You can add parameters for hlbmpwatcher in ExecStart field if you want
+mkdir -p ~/.config/systemd/user/
+cp hlbmpwatcher.service ~/.config/systemd/user/
+systemctl --user enable hlbmpwatcher.service
+systemctl --user start hlbmpwatcher.service
+```

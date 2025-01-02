@@ -172,6 +172,12 @@ if __name__ == "__main__":
                             autodetected_paths.extend(screenshot_folders_from_svencoop_path(sven_path))
                         else:
                             sven_path = None
+                    elif app == '1707900':
+                        delta_path = os.path.join(storage_path, 'steamapps', 'common', 'Delta Particles')
+                        if os.path.isdir(delta_path):
+                            autodetected_paths.extend(screenshot_folders_from_hl_path(delta_path))
+                        else:
+                            delta_path = None
 
     screenshot_paths = autodetected_paths
     extra_paths = []

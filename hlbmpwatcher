@@ -37,60 +37,50 @@ def get_main_steam_path():
         return steam_path
     return None
 
-def get_halflife_path(steam_storage_paths):
-    for storage_path in steam_storage_paths:
-        apps_path = os.path.join(storage_path, 'steamapps', 'common')
-        hl_path = os.path.join(apps_path, 'Half-Life')
-        if os.path.isdir(hl_path):
-            return hl_path
-    return None
-
-def get_svencoop_path(steam_storage_paths):
-    for storage_path in steam_storage_paths:
-        apps_path = os.path.join(storage_path, 'steamapps', 'common')
-        sven_path = os.path.join(apps_path, 'Sven Co-op')
-        if os.path.isdir(sven_path):
-            return sven_path
-    return None
-
-def screenshot_folders_from_storage_paths(steam_storage_paths):
+def screenshot_folders_from_hl_path(hl_path):
     paths = []
 
-    hl_path = get_halflife_path(steam_storage_paths)
-    if hl_path is not None:
-        for subitem in os.listdir(hl_path):
-            possible_mod_path = os.path.join(hl_path, subitem)
-            if os.path.isdir(possible_mod_path):
-                liblist_path = os.path.join(possible_mod_path, 'liblist.gam')
-                if os.path.isfile(liblist_path):
-                    paths.append(possible_mod_path)
-
-    sven_path = get_svencoop_path(steam_storage_paths)
-    if sven_path is not None:
-        sven_screenshots_path = os.path.join(sven_path, 'svencoop', 'screenshots')
-        if os.path.isdir(sven_screenshots_path):
-            paths.append(sven_screenshots_path)
+    for subitem in os.listdir(hl_path):
+        possible_mod_path = os.path.join(hl_path, subitem)
+        if os.path.isdir(possible_mod_path):
+            liblist_path = os.path.join(possible_mod_path, 'liblist.gam')
+            if os.path.isfile(liblist_path):
+                paths.append(possible_mod_path)
 
     return paths
 
-def get_steam_storage_paths(main_steam_path):
-    storage_paths = []
+def screenshot_folders_from_svencoop_path(sven_path):
+    paths = []
+    sven_screenshots_path = os.path.join(sven_path, 'svencoop', 'screenshots')
+    if os.path.isdir(sven_screenshots_path):
+        paths.append(sven_screenshots_path)
+    return paths
+
+def get_steam_storage_paths_and_apps(main_steam_path):
+    storage_paths_and_apps = {}
 
     libraryfolders_path = os.path.join(main_steam_path, 'steamapps', 'libraryfolders.vdf')
     try:
         with open(libraryfolders_path, 'r') as libraryfolders_file:
             regex = re.compile(r'\s*"path"\s*"(.+)"')
+            appregex = re.compile(r'\s*"([0-9]+)"\s+"[0-9]+"')
+            storage_path = ''
             for line in libraryfolders_file.readlines():
                 result = regex.match(line)
                 if result:
                     storage_path = result.group(1)
                     if os.path.isdir(storage_path):
-                        storage_paths.append(os.path.normpath(storage_path))
+                        storage_path = os.path.normpath(storage_path)
+                        storage_paths_and_apps[storage_path] = []
+                    else:
+                        storage_path = ''
+                elif len(storage_path) > 0:
+                    result = appregex.match(line)
+                    if result:
+                        storage_paths_and_apps[storage_path].append(result.group(1))
     except Error:
         pass
-    if len(storage_paths) == 0:
-        storage_paths.append(main_steam_path)
-    return storage_paths
+    return storage_paths_and_apps
 
 def convert_to_png(img_path):
     # error thrown if bmp file is not fully written yet
@@ -158,7 +148,7 @@ if __name__ == "__main__":
 
     autodetected_paths = []
     hl_path = None
-    main_steam_path = None
+    sven_path = None
 
     if not args.no_autodetect:
         main_steam_path = get_main_steam_path()
@@ -167,9 +157,21 @@ if __name__ == "__main__":
         elif not os.path.isdir(main_steam_path):
             print("Directory '%s' doesn't exist" % main_steam_path)
         else:
-            steam_storage_paths = get_steam_storage_paths(main_steam_path)
-            hl_path = get_halflife_path(steam_storage_paths)
-            autodetected_paths = screenshot_folders_from_storage_paths(steam_storage_paths)
+            steam_storage_paths_and_apps = get_steam_storage_paths_and_apps(main_steam_path)
+            for storage_path, apps in steam_storage_paths_and_apps.items():
+                for app in apps:
+                    if app == '70':
+                        hl_path = os.path.join(storage_path, 'steamapps', 'common', 'Half-Life')
+                        if os.path.isdir(hl_path):
+                            autodetected_paths.extend(screenshot_folders_from_hl_path(hl_path))
+                        else:
+                            hl_path = None
+                    elif app == '225840':
+                        sven_path = os.path.join(storage_path, 'steamapps', 'common', 'Sven Co-op')
+                        if os.path.isdir(sven_path):
+                            autodetected_paths.extend(screenshot_folders_from_svencoop_path(sven_path))
+                        else:
+                            sven_path = None
 
     screenshot_paths = autodetected_paths
     extra_paths = []

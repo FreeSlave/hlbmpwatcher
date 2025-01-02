@@ -153,9 +153,9 @@ if __name__ == "__main__":
     if not args.no_autodetect:
         main_steam_path = get_main_steam_path()
         if main_steam_path is None:
-            print("Couldn't detect steam main path")
+            logging.info("Couldn't detect steam main path")
         elif not os.path.isdir(main_steam_path):
-            print("Directory '%s' doesn't exist" % main_steam_path)
+            logging.info("Directory '%s' doesn't exist", main_steam_path)
         else:
             steam_storage_paths_and_apps = get_steam_storage_paths_and_apps(main_steam_path)
             for storage_path, apps in steam_storage_paths_and_apps.items():
@@ -185,28 +185,28 @@ if __name__ == "__main__":
         if os.path.isdir(path):
             extra_paths.append(path)
         else:
-            print("'%s' is not an existing directory." % path)
+            logging.info("'%s' is not an existing directory.", path)
     screenshot_paths.extend(set(extra_paths))
 
     if len(screenshot_paths) == 0:
-        print("Nothing to do. Directories are not provided or do not exists. Exiting...")
+        logging.info("Nothing to do. Directories are not provided or do not exists. Exiting...")
         sys.exit()
 
     should_observe = not (args.no_watch or args.dry_run)
 
     if hl_path is not None:
         if should_observe:
-            print("Observing Half-Life directory for mod folders:")
+            logging.info("Observing Half-Life directory for mod folders:")
         else:
-            print("Half-Life directory:")
-        print("\t%s" % hl_path)
+            logging.info("Half-Life directory:")
+        logging.info("\t%s", hl_path)
 
     if should_observe:
-        print("Observing screenshot directories:")
+        logging.info("Observing screenshot directories:")
     else:
-        print("Screenshot directories:")
+        logging.info("Screenshot directories:")
     for path in screenshot_paths:
-        print("\t%s" % path)
+        logging.info("\t%s", path)
 
     conversion_executor =  None if args.dry_run else concurrent.futures.ThreadPoolExecutor(max_workers=4)
     if args.convert_existing:

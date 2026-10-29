@@ -5,8 +5,10 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler
 from PIL import Image
 import concurrent.futures
@@ -78,7 +80,7 @@ def get_steam_storage_paths_and_apps(main_steam_path):
                     result = appregex.match(line)
                     if result:
                         storage_paths_and_apps[storage_path].append(result.group(1))
-    except Error:
+    except OSError:
         pass
     return storage_paths_and_apps
 
@@ -99,39 +101,125 @@ def convert_to_png(img_path):
             logging.error("Cannot convert '%s' to PNG: %s", img_path, str(err))
 
 class ScreenshotHandler(FileSystemEventHandler):
+    def __init__(self, handle_created=False):
+        super().__init__()
+        self.handle_created = handle_created
+
     @staticmethod
-    def on_modified(event):
-        if event.is_directory:
-            return None
-        elif event.event_type == 'modified' and event.src_path.endswith('.bmp'):
-            img_path = event.src_path
-            convert_to_png(img_path)
+    def _maybe_convert(is_directory, path):
+        if not is_directory and path.endswith('.bmp'):
+            convert_to_png(path)
+
+    def on_modified(self, event):
+        self._maybe_convert(event.is_directory, event.src_path)
+
+    def on_created(self, event):
+        if self.handle_created:
+            self._maybe_convert(event.is_directory, event.src_path)
+
+    def on_moved(self, event):
+        if self.handle_created:
+            self._maybe_convert(event.is_directory, event.dest_path)
+
+class Watcher:
+    def __init__(self, poll_interval=2.0, force_polling=False):
+        self.poll_interval = poll_interval
+        self.force_polling = force_polling
+        self.inotify_observer = Observer()
+        self.polling_observer = PollingObserver(timeout=poll_interval)
+        self.polling_started = False
+        self.screenshot_handler = ScreenshotHandler()
+        self.polling_screenshot_handler = ScreenshotHandler(handle_created=True)
+        self.screenshot_watches = {}  # path -> (observer, watch)
+        self.lock = threading.RLock()
+
+    def start(self):
+        self.inotify_observer.start()
+
+    def stop(self):
+        for observer, started in ((self.inotify_observer, True),
+                                  (self.polling_observer, self.polling_started)):
+            if started:
+                observer.stop()
+                observer.join()
+
+    def wait(self):
+        try:
+            while self.inotify_observer.is_alive():
+                self.inotify_observer.join(1)
+        except TypeError:
+            # support old versions
+            while True:
+                time.sleep(1)
+
+    def _ensure_polling_started(self):
+        if not self.polling_started:
+            self.polling_observer.start()
+            self.polling_started = True
+
+    def _schedule(self, path, handler, polling_handler=None):
+        """Returns (observer, watch), or None if the path couldn't be watched."""
+        with self.lock:
+            if not self.force_polling:
+                try:
+                    watch = self.inotify_observer.schedule(handler, path, recursive=False)
+                    return (self.inotify_observer, watch)
+                except OSError as err:
+                    logging.warning("Cannot watch '%s' with inotify (%s). Falling back to polling every %s s.",
+                                    path, err, self.poll_interval)
+            try:
+                self._ensure_polling_started()
+                watch = self.polling_observer.schedule(polling_handler or handler, path, recursive=False)
+                return (self.polling_observer, watch)
+            except OSError as err:
+                logging.error("Cannot watch '%s': %s", path, err)
+                return None
+
+    def watch_screenshots(self, path):
+        entry = self._schedule(path, self.screenshot_handler, self.polling_screenshot_handler)
+        if entry is not None:
+            with self.lock:
+                self.screenshot_watches[path] = entry
+
+    def watch_modfolders(self, path, handler):
+        self._schedule(path, handler)
+
+    def is_watching_screenshots(self, path):
+        with self.lock:
+            return path in self.screenshot_watches
+
+    def unwatch_screenshots(self, path):
+        with self.lock:
+            entry = self.screenshot_watches.pop(path, None)
+        if entry is not None:
+            observer, watch = entry
+            try:
+                observer.unschedule(watch)
+            except Exception as err:
+                logging.debug("Cannot unschedule '%s': %s", path, err)
 
 class ModfolderHandler(FileSystemEventHandler):
-    def __init__(self, observer, modwatches):
+    def __init__(self, watcher):
         super().__init__()
-        self.observer = observer
-        self.modwatches = modwatches
+        self.watcher = watcher
     def on_created(self, event):
         if not event.is_directory:
             return None
         logging.info("Starting observing new directory: %s", event.src_path)
-        modwatches[event.src_path] = observer.schedule(ScreenshotHandler(), event.src_path, recursive=False)
+        self.watcher.watch_screenshots(event.src_path)
     def on_deleted(self, event):
         if not event.is_directory:
             return None
-        if event.src_path in modwatches:
+        if self.watcher.is_watching_screenshots(event.src_path):
             logging.info("Removing directory from the watch list because it was deleted: %s", event.src_path)
-            observer.unschedule(modwatches[event.src_path])
-            del modwatches[event.src_path]
+            self.watcher.unwatch_screenshots(event.src_path)
     def on_moved(self, event):
         if not event.is_directory:
             return None
-        if event.src_path in modwatches:
+        if self.watcher.is_watching_screenshots(event.src_path):
             logging.info("The directory renamed from '%s' to '%s'. Updating the watch.", event.src_path, event.dest_path)
-            observer.unschedule(modwatches[event.src_path])
-            del modwatches[event.src_path]
-            modwatches[event.dest_path] = observer.schedule(ScreenshotHandler(), event.dest_path, recursive=False)
+            self.watcher.unwatch_screenshots(event.src_path)
+            self.watcher.watch_screenshots(event.dest_path)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -144,6 +232,8 @@ if __name__ == "__main__":
     arg_parser.add_argument('--dry-run', action='store_true', help="don't start observation, don't convert images, just print observed paths")
     arg_parser.add_argument('--no-watch', action='store_true', help="don't start observation, print observed paths and convert existing bmp files if --convert-existing option is provided")
     arg_parser.add_argument('--convert-existing', action='store_true', help="convert already existing bmp screenshots at the hlbmpwatcher startup")
+    arg_parser.add_argument('--poll', action='store_true', help="don't use inotify at all, always poll directories for changes")
+    arg_parser.add_argument('--poll-interval', type=float, default=2.0, metavar='SECONDS', help="how often to check directories when polling (default: %(default)s)")
     args = arg_parser.parse_args()
 
     autodetected_paths = []
@@ -230,30 +320,19 @@ if __name__ == "__main__":
                         datefmt='%Y-%m-%d %H:%M:%S',
                         force=True)
 
-    screenshot_handler = ScreenshotHandler()
-    observer = Observer()
-    modwatches = dict()
-
-    for path in screenshot_paths:
-        modwatches[path] =  observer.schedule(screenshot_handler, path, recursive=False)
-
-    modfolder_handler = ModfolderHandler(observer, modwatches)
-
-    if hl_path is not None:
-        observer.schedule(modfolder_handler, hl_path, recursive=False)
-
-    observer.start()
+    watcher = Watcher(poll_interval=args.poll_interval, force_polling=args.poll)
+    watcher.start()
     try:
+        for path in screenshot_paths:
+            watcher.watch_screenshots(path)
+
+        if hl_path is not None:
+            watcher.watch_modfolders(hl_path, ModfolderHandler(watcher))
+
         try:
-            while observer.is_alive():
-                observer.join(1)
-        except TypeError:
-            # support old versions
-            while True:
-                time.sleep(1)
+            watcher.wait()
         except KeyboardInterrupt:
             # just stop the loop
             pass
     finally:
-        observer.stop()
-        observer.join()
+        watcher.stop()

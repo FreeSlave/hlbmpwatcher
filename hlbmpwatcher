@@ -2,7 +2,9 @@
 
 import argparse
 import logging
+import logging.handlers
 import os
+import queue
 import re
 import sys
 import threading
@@ -221,6 +223,20 @@ class ModfolderHandler(FileSystemEventHandler):
             self.watcher.unwatch_screenshots(event.src_path)
             self.watcher.watch_screenshots(event.dest_path)
 
+def setup_nonblocking_logging(fmt, datefmt=None):
+    console = logging.StreamHandler()
+    console.setFormatter(logging.Formatter(fmt, datefmt))
+
+    log_queue = queue.SimpleQueue()
+    listener = logging.handlers.QueueListener(log_queue, console)
+    listener.start()
+
+    root = logging.getLogger()
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+    root.addHandler(logging.handlers.QueueHandler(log_queue))
+    root.setLevel(logging.INFO)
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
@@ -315,7 +331,10 @@ if __name__ == "__main__":
     if args.no_watch or args.dry_run:
         sys.exit()
 
-    logging.basicConfig(level=logging.INFO,
+    if sys.platform == 'win32':
+        setup_nonblocking_logging('%(asctime)s - %(message)s', '%Y-%m-%d %H:%M:%S')
+    else:
+        logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S',
                         force=True)
